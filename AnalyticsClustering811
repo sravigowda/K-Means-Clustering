@@ -79,8 +79,16 @@ public class AnalyticsClustering {
 		Dataset<Row> SongsMetaData_nonull = SongsMetaData.na().drop("any");
 		SongsMetaData_nonull.show();
 		
-	
-			
+		Dataset <Row> Notification_Clicks = sparkSession.read().option("header", false).option("inferschema", false)
+				.csv("/Users/ravig/Documents/Upgrad/Complete/Course6/Project/notification_clicks/Consolidated_clicks")
+				.toDF("NotificationID","UserID","Date");
+		Dataset <Row> Notification_Clicks_nodate = Notification_Clicks.drop("Date");
+		Dataset <Row> Notification_Clicks_clean = Notification_Clicks_nodate.distinct();
+		
+		Dataset <Row> Notification_details = sparkSession.read().option("header", false).option("inferschema", false)
+				.csv("/Users/ravig/Documents/Upgrad/Complete/Course6/Project/notification.csv")
+				.toDF("NotificationID","TopArtist");
+		
 		
 		Dataset<Row> ClickStreamData_new = ClickStreamData.select(col("UserID"),col("epoch_seconds").cast("Integer"),col("SongID"),col("Date"));
 		Dataset<Row> ClickStreamData_count = ClickStreamData_new.withColumn("Count", functions.lit(1));
@@ -142,8 +150,8 @@ public class AnalyticsClustering {
 		User_Unique_songs_Total_songs_count_artist.show();
 		//User_Unique_songs_Total_songs_count_artist.printSchema();
 		Dataset<Row> User_Unique_songs_Total_songs_count_artist_clean = User_Unique_songs_Total_songs_count_artist.na().drop("any");
-		Dataset<Row> User_Unique_songs_Total_songs_gt_ten = User_Unique_songs_Total_songs_count_artist_clean.
-														filter(User_Unique_songs_Total_songs_count_artist_clean.col("TotalSongsPlayedoverall").gt("10"));
+		Dataset<Row> User_Unique_songs_Total_songs_gt_ten = User_Unique_songs_Total_songs_count_artist_clean;
+														//.filter(User_Unique_songs_Total_songs_count_artist_clean.col("TotalSongsPlayedoverall").gt("10"));
 		
 		//User_Unique_songs_Total_songs_count_artist_clean.show(100);
 		User_Unique_songs_Total_songs_gt_ten.show();
@@ -181,12 +189,190 @@ public class AnalyticsClustering {
 		Top_Rank.show();
 		Dataset<Row> Top_Rank_Rename = Top_Rank.withColumnRenamed("ArtistID", "TopArtist");
 		
-		Dataset<Row> cluster_top = predictions.join(Top_Rank_Rename,"prediction").drop("count").drop("rank");
+		Dataset<Row> cluster_top = predictions.join(Top_Rank_Rename,"prediction").drop("count").drop("rank").drop("features");
 		
 		
+		System.out.println("Cluster details after dropping unwanted columns");
 		cluster_top.show();
 		
  		
+		/* Calculating CTR for Notification ID 9553 */
+		
+		
+		/*Filtering Out the list of Users who have clicked on Notification received for the ID 9659 */
+		
+		Dataset <Row> Notification_user_9553 = Notification_Clicks_clean.filter(Notification_Clicks_clean.col("NotificationID").equalTo(9553));
+		Dataset <Row> Artists_notify_9553 = Notification_details.filter(Notification_details.col("NotificationID").equalTo(9659));
+		
+		System.out.println("List of Users who have clicked for Notification 9659");
+		Notification_user_9553.show();
+		
+		System.out.println("List of Artists for Notification 9659");
+		Artists_notify_9553.show();
+		
+		Dataset <Row> cluster_users_notified = cluster_top.join(Artists_notify_9553,"TopArtist");
+		System.out.println("List of Users to whom we  sent Notification 9659");
+		cluster_users_notified.show();
+		
+		Dataset<Row> cluster_clicks = cluster_users_notified.join(Notification_user_9553,"UserID");
+		System.out.println("List of Users to who clicked on Notification 9659");
+		cluster_clicks.show();
+		
+		long Clicks = cluster_clicks.count();
+		long Count = cluster_users_notified.count();
+		double CTR = 0.0;
+		if (Clicks != 0)
+		{
+			CTR = Count/Clicks;	
+		}
+		else
+		{
+			System.out.println("CTR cannot be calculated since notificaiton was not sent to any users");
+		}
+		
+		
+		System.out.println("Click Stream ratio for 9553 is " +CTR);
+		
+		
+/*Filtering Out the list of Users who have clicked on Notification received for the ID 9660 */
+		
+		Dataset <Row> Notification_user_9660 = Notification_Clicks_clean.filter(Notification_Clicks_clean.col("NotificationID").equalTo(9660));
+		Dataset <Row> Artists_notify_9660 = Notification_details.filter(Notification_details.col("NotificationID").equalTo(9660));
+		
+		System.out.println("List of Users who have clicked for Notification 9660");
+		Notification_user_9660.show();
+		
+		System.out.println("List of Artists for Notification 9660");
+		Artists_notify_9660.show();
+		
+		Dataset <Row> cluster_users_9660_notified = cluster_top.join(Artists_notify_9660,"TopArtist");
+		System.out.println("List of Users to whom we  sent Notification 9660");
+		cluster_users_notified.show();
+		
+		Dataset<Row> cluster_9660_clicks = cluster_users_notified.join(Notification_user_9660,"UserID");
+		System.out.println("List of Users to who clicked on Notification 9660");
+		cluster_clicks.show();
+		
+		Clicks = cluster_9660_clicks.count();
+		Count = cluster_users_9660_notified.count();
+		CTR = 0.0;
+		if (Clicks != 0)
+		{
+			CTR = Count/Clicks;	
+		}
+		else
+		{
+			System.out.println("CTR cannot be calculated since notificaiton was not sent to any users");
+		}
+		
+		
+		System.out.println("Click Stream ratio for 9660 is " +CTR);
+
+		
+/*Filtering Out the list of Users who have clicked on Notification received for the ID 9690 */
+		
+		Dataset <Row> Notification_user_9690 = Notification_Clicks_clean.filter(Notification_Clicks_clean.col("NotificationID").equalTo(9690));
+		Dataset <Row> Artists_notify_9690 = Notification_details.filter(Notification_details.col("NotificationID").equalTo(9690));
+		
+		System.out.println("List of Users who have clicked for Notification 9690");
+		Notification_user_9690.show();
+		
+		System.out.println("List of Artists for Notification 9690");
+		Artists_notify_9690.show();
+		
+		Dataset <Row> cluster_users_9690_notified = cluster_top.join(Artists_notify_9690,"TopArtist");
+		System.out.println("List of Users to whom we  sent Notification 9690");
+		cluster_users_notified.show();
+		
+		Dataset<Row> cluster_9690_clicks = cluster_users_notified.join(Notification_user_9690,"UserID");
+		System.out.println("List of Users to who clicked on Notification 9690");
+		cluster_clicks.show();
+		
+		Clicks = cluster_9690_clicks.count();
+		Count = cluster_users_9690_notified.count();
+		CTR = 0.0;
+		if (Clicks != 0)
+		{
+			CTR = Count/Clicks;	
+		}
+		else
+		{
+			System.out.println("CTR cannot be calculated since notificaiton was not sent to any users");
+		}
+		
+		
+		System.out.println("Click Stream ratio for 9690 is " +CTR);
+		
+/*Filtering Out the list of Users who have clicked on Notification received for the ID 9703 */
+		
+		Dataset <Row> Notification_user_9703 = Notification_Clicks_clean.filter(Notification_Clicks_clean.col("NotificationID").equalTo(9703));
+		Dataset <Row> Artists_notify_9703 = Notification_details.filter(Notification_details.col("NotificationID").equalTo(9703));
+		
+		System.out.println("List of Users who have clicked for Notification 9703");
+		Notification_user_9703.show();
+		
+		System.out.println("List of Artists for Notification 9703");
+		Artists_notify_9703.show();
+		
+		Dataset <Row> cluster_users_9703_notified = cluster_top.join(Artists_notify_9703,"TopArtist");
+		System.out.println("List of Users to whom we  sent Notification 9703");
+		cluster_users_notified.show();
+		
+		Dataset<Row> cluster_9703_clicks = cluster_users_notified.join(Notification_user_9703,"UserID");
+		System.out.println("List of Users to who clicked on Notification 9703");
+		cluster_clicks.show();
+		
+		Clicks = cluster_9703_clicks.count();
+		Count = cluster_users_9703_notified.count();
+		CTR = 0.0;
+		if (Clicks != 0)
+		{
+			CTR = Count/Clicks;	
+		}
+		else
+		{
+			System.out.println("CTR cannot be calculated since notificaiton was not sent to any users");
+		}
+		
+		
+		System.out.println("Click Stream ratio for 9703 is " +CTR);
+		
+		
+/*Filtering Out the list of Users who have clicked on Notification received for the ID 9551 */
+		
+		Dataset <Row> Notification_user_9551 = Notification_Clicks_clean.filter(Notification_Clicks_clean.col("NotificationID").equalTo(9551));
+		Dataset <Row> Artists_notify_9551 = Notification_details.filter(Notification_details.col("NotificationID").equalTo(9551));
+		
+		System.out.println("List of Users who have clicked for Notification 9551");
+		Notification_user_9551.show();
+		
+		System.out.println("List of Artists for Notification 9551");
+		Artists_notify_9551.show();
+		
+		Dataset <Row> cluster_users_9551_notified = cluster_top.join(Artists_notify_9551,"TopArtist");
+		System.out.println("List of Users to whom we  sent Notification 9551");
+		cluster_users_notified.show();
+		
+		Dataset<Row> cluster_9551_clicks = cluster_users_notified.join(Notification_user_9551,"UserID");
+		System.out.println("List of Users to who clicked on Notification 9551");
+		cluster_clicks.show();
+		
+		Clicks = cluster_9551_clicks.count();
+		Count = cluster_users_9551_notified.count();
+		CTR = 0.0;
+		if (Clicks != 0)
+		{
+			CTR = Count/Clicks;	
+		}
+		else
+		{
+			System.out.println("CTR cannot be calculated since notificaiton was not sent to any users");
+		}
+		
+		
+		System.out.println("Click Stream ratio for 9551 is " +CTR);
+		
+		
 		
 		
 		

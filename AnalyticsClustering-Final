@@ -1,0 +1,294 @@
+import org.apache.log4j.Level;
+
+import org.apache.log4j.Logger;
+import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.functions;
+import org.apache.spark.sql.expressions.Window;
+import org.apache.spark.sql.expressions.WindowSpec;
+import org.apache.spark.ml.feature.Bucketizer;
+import org.apache.spark.ml.feature.Imputer;
+import org.apache.spark.ml.feature.VectorAssembler;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.ml.feature.ImputerModel;
+import org.apache.spark.ml.feature.MaxAbsScaler;
+import org.apache.spark.ml.feature.MaxAbsScalerModel;
+import org.apache.spark.ml.feature.Normalizer;
+import org.apache.spark.ml.feature.StringIndexer;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.RelationalGroupedDataset;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.SaveMode;
+import org.apache.spark.ml.recommendation.ALS;
+import org.apache.spark.ml.recommendation.ALSModel;
+import org.apache.spark.ml.clustering.KMeans;
+import org.apache.spark.ml.clustering.KMeansModel;
+import org.apache.spark.ml.evaluation.*;
+import com.github.fommil.netlib.*;
+import org.apache.spark.sql.DataFrameNaFunctions;
+
+import java.util.Arrays;
+import java.util.List;
+
+import org.apache.spark.sql.types.StructField;
+import org.apache.spark.sql.types.StructType;
+
+import scala.Tuple2;
+import scala.collection.Seq;
+
+import org.apache.hadoop.classification.InterfaceStability.Stable;
+import org.apache.hadoop.fs.Path;
+
+import static org.apache.spark.sql.functions.*;
+
+
+public class Analytics {
+
+	public static void main (String [] args) {
+		
+		
+		Logger.getRootLogger().setLevel(Level.ERROR);
+		Logger.getLogger("org").setLevel(Level.ERROR);
+		
+		SparkSession sparkSession = SparkSession.builder().appName("AnalyticsML").master("local[*]").getOrCreate();
+		System.out.println(args[0]);
+		System.out.println(args[1]);
+		System.out.println(args[2]);
+		System.out.println(args[3]);
+		
+		// We are loading user activity ClickStreamData into a DataSet
+		
+		Dataset<Row> ClickStreamData = sparkSession.read().option("header", false).option("inferschema", false)
+				.csv(args[0])
+				.toDF("UserID","epoch_seconds","SongID","Date");
+		
+		Dataset<Row> SongsMetaData = sparkSession.read().option("header", false).option("inferschema", false)
+				.csv(args[1])
+				.toDF("SongID","ArtistID");
+		SongsMetaData = SongsMetaData.na().drop();
+		
+		Dataset <Row> Notification_Clicks = sparkSession.read().option("header", false).option("inferschema", false)
+				.csv(args[2])
+				.toDF("NotificationID","UserID","Date");
+				
+		/* 
+		 * After loading the Notification data,we are dropping Date column since we are not going to use it. 
+		 * Along with this we are removing duplicates if any
+		 * 
+		 */
+		
+		Notification_Clicks = Notification_Clicks.drop("Date").distinct();
+
+		
+		
+		Dataset <Row> Notification_details = sparkSession.read().option("header", false).option("inferschema", false)
+				.csv(args[3])
+				.toDF("NotificationID","ArtistID");
+		
+		/*
+		 * We are filtering out the unwanted Notification ID.
+		 */
+		
+		 Dataset<Row> Notification_filter = Notification_details.select("NotificationID").distinct();
+		//Notification_filter.show();
+		//System.out.println(Notification_filter.count());
+		
+		
+		//System.out.println(Notification_filter.count());
+	    Notification_Clicks = Notification_Clicks.join(Notification_filter, "NotificationID");
+		Notification_Clicks = Notification_Clicks.na().drop();
+		Notification_Clicks = Notification_Clicks.distinct();
+		
+		
+		
+		/*
+		 * We are casting timestamp into integer. We are dropping of this column since It was not needed. Below link talks about the same
+		 * https://learn.upgrad.com/v/course/78/question/93683
+		 */
+		
+		ClickStreamData = ClickStreamData.withColumn("Count", functions.lit(1)).drop("epoch_seconds");
+		
+		
+			
+		// We are calculating the number of times a user has listened to a particular song
+		
+		Dataset<Row> SumValue = ClickStreamData.groupBy("UserID","SongID").sum("Count")
+				.withColumnRenamed("sum(Count)", "ListenedCount");
+		
+		
+		
+		// We are converting UserID and SongID to Double since ALS doesn't accept string variables
+		
+		WindowSpec w = Window.orderBy("UserID");
+	
+		
+		Dataset<Row> userID_change = ClickStreamData.select("UserID").distinct().
+				//withColumn("NewUserID",monotonically_increasing_id()); --> We are not using this since it creates problems with ALS
+				withColumn("NewUserID",row_number().over(w));
+		
+		w = Window.orderBy("SongID");
+		
+		Dataset<Row> songID_change = ClickStreamData.select("SongID").distinct()
+				//.withColumn("NewSongID", monotonically_increasing_id());
+				.withColumn("NewSongID", row_number().over(w));
+	
+				
+		// We are casting ListenedCount to Double
+	
+		Dataset<Row> SumValue_int = SumValue.select(col("UserID"),col("SongID"),col("ListenedCount").cast("Double"));
+		
+		SumValue_int.printSchema();
+				
+		
+		
+				
+		/* In the following few lines of code, we are joining changed UserID and SongID to original dataset. After this we 
+		 * dropping unwanted columns "UserID" and "SongID"
+		 */
+		
+		Dataset<Row> ClickStreamData_Change = SumValue_int.join(userID_change,"UserID").join(songID_change,"songID");
+		
+		Dataset<Row> ClickStreamData_clean = ClickStreamData_Change.drop("UserID").drop("SongID");
+		
+		System.out.println("Just before ALS");
+		
+		ALS als = new ALS();
+		long seed = 1800009193L;
+		als.setMaxIter(20)
+		   .setSeed(seed)
+		   .setItemCol("NewSongID")
+		   .setRatingCol("ListenedCount")
+		   .setUserCol("NewUserID")
+		   .setImplicitPrefs(true)
+		   .setRank(12)
+		   .setRegParam(0.2);
+		   
+		/*
+		 * We are applying ALS on the ClickStream data and extract features from it. 
+		 */
+		
+		Dataset<Row> userfeatures = als.fit(ClickStreamData_clean).userFactors();
+		
+		/* Now we are converting userFactors array into individual values to be applied in Vector Assembler */
+		for(int i = 0; i < 12; i++) {
+			userfeatures = userfeatures.withColumn("factor"+i, userfeatures.col("features").getItem(i));
+		}
+		
+		userfeatures = userfeatures.drop("features");
+		
+		System.out.println("We have completed extracting features from ALS");
+		
+		/* Now we are building k-means model using the features derived from ALS
+		 * We are planning to come up with 350 clusters
+		 */
+		VectorAssembler assembler = new VectorAssembler()
+				  .setInputCols(new String[] {"factor0", "factor1", "factor2", "factor3", "factor4", "factor5", "factor6", "factor7"
+						  , "factor8", "factor9", "factor10","factor11" })
+				  .setOutputCol("features");
+		
+		Dataset<Row> KMeansInput = assembler.transform(userfeatures);
+		KMeans kmeans = new KMeans().setK(350);
+		KMeansModel Model = kmeans.fit(KMeansInput);
+		
+		
+		
+		//Make predictions and select cluster number and userID
+		
+		Dataset<Row> predictions = Model.transform(KMeansInput).select("id", "prediction");
+		
+		System.out.println("We have completed K-Stream");
+		
+		//predictions.show(100);
+		
+		predictions = predictions.withColumnRenamed("id", "NewUserID");
+		Dataset<Row> clickstream_prediction = ClickStreamData_clean.join(predictions,"NewUserID");
+		
+		clickstream_prediction= clickstream_prediction.join(userID_change,"NewUserID").join(songID_change,"NewSongID");
+		clickstream_prediction=clickstream_prediction.drop("NewSongID").drop("NewUserID");
+		
+		clickstream_prediction = clickstream_prediction.join(SongsMetaData,"SongID");
+		clickstream_prediction = clickstream_prediction.drop("SongID");
+		System.out.println("Done with Clickstream join with prediction data");
+		
+
+		
+		Dataset<Row> clickstream_prediction_count = clickstream_prediction.groupBy("prediction","ArtistID").count();
+		Dataset<Row> Rank = clickstream_prediction_count.withColumn("rank", dense_rank().over(Window.partitionBy("prediction")
+				.orderBy(desc("count"))));
+		
+		Rank=Rank.filter(Rank.col("rank").equalTo(1));
+		System.out.println("Done with finding the dominant artist in a cluster");
+		
+		//clickstream_prediction_count.show(100);
+		//Rank.show(300);
+		//Rank.coalesce(1).write().mode(SaveMode.Overwrite).format("csv").save("/Users/ravig/clickstream/");
+		
+		
+		Rank=Rank.withColumnRenamed("ArtistID", "TopArtist");
+		Dataset<Row> cluster_top = clickstream_prediction.join(Rank,clickstream_prediction.col("prediction")
+									.equalTo(Rank.col("prediction"))
+									.and(clickstream_prediction.col("ArtistID").equalTo(Rank.col("TopArtist"))))
+				.drop("count").drop("rank").drop("ListenedCount").drop(clickstream_prediction.col("prediction"))
+				.drop("TopArtist");
+		
+		
+		//cluster_top.show();
+		
+		/* Joining Notification ID for each Dominant Artist in a cluster */
+		
+		cluster_top = cluster_top.join(Notification_details,"ArtistID");
+		//Dataset<Row> cluster_details = cluster_top.groupBy("UserID","ArtistID","NotificationID").count();
+		cluster_top.coalesce(1).write().mode(SaveMode.Overwrite).format("csv").save("/Users/ravig/cluster_details/");
+		
+		
+		
+		//cluster_top.show();
+		
+		/* 
+		 * We are grouping Cluster_top that has NotificationID and Artist ID to find the number of Notifications sent per cluster
+		 * 
+		 */
+		
+		//Dataset<Row> Notification_number = cluster_top.select("NotificationID","ArtistID").groupBy("NotificationID","ArtistID").count();
+		Dataset<Row> Notification_number = cluster_top.select("NotificationID").groupBy("NotificationID")
+										   .count().withColumnRenamed("count", "Notification_Sent");
+		
+	
+		
+		
+		//Notification_number.show();
+		//System.out.println(Notification_number.count());
+		System.out.println("Completed calculating the number of Notification sent");
+
+		
+		/*
+		 * We are joining Notification Clicks data with Cluster data to find the number of users who have clicked on the notification per Notification ID
+		 */
+		Dataset<Row> Notification_clicked = cluster_top.join(Notification_Clicks,
+				cluster_top.col("UserID").equalTo(Notification_Clicks.col("UserID"))
+						.and(cluster_top.col("NotificationID").equalTo(Notification_Clicks.col("NotificationID"))))
+						.drop(cluster_top.col("NotificationID"));
+						
+		Dataset<Row> Notification_clicked_number = Notification_clicked.select("NotificationID").groupBy("NotificationID").count()
+													.withColumnRenamed("count", "Notification_Clicked");
+		//Notification_clicked_number.show(45);
+		//System.out.println(Notification_clicked_number.count());
+		
+		System.out.println("Completed calculating the number of Notification Clicked");
+		
+		
+		Dataset<Row> Notification_calculator = Notification_number
+								.join(Notification_clicked_number, "NotificationID")
+								.drop(Notification_clicked_number.col("NotificationID"));
+		
+		Notification_calculator = Notification_calculator
+								.withColumn("ClickToRatio", (Notification_calculator.col("Notification_Clicked").multiply(functions.lit(100)))
+								.divide(Notification_number.col("Notification_Sent")));
+																				
+		Notification_calculator.show();
+		//Notification_calculator.coalesce(1).write().mode(SaveMode.Overwrite).format("csv").save("/Users/ravig/Notification_CTR/");
+		
+		
+		
+				} 
+}
